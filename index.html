@@ -27,6 +27,10 @@ button.alt{background:transparent;border:1px solid var(--ac)}
 .bad{color:#f87171;font-weight:bold;text-align:center;font-size:18px}
 .hide{display:none}
 small{color:var(--mut)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 4px;border-bottom:1px solid #1d3a8a}
+tr.r{cursor:pointer}tr.r:hover{background:#12307d}
+.lst{max-height:360px;overflow:auto}
 </style>
 </head>
 <body>
@@ -46,6 +50,10 @@ small{color:var(--mut)}
       <div id="loadMsg"><small>Cargando base de datos…</small></div>
       <input type="file" id="file" accept=".xlsx" class="hide">
     </div>
+    <div class="box">
+      <input id="q" placeholder="Buscar en la lista (nombre, cédula, curso)">
+      <div class="lst" id="lista"></div>
+    </div>
     <div id="res" class="box qr hide">
       <canvas id="cv"></canvas>
       <div class="name" id="nm"></div>
@@ -61,20 +69,60 @@ const norm = v => String(v ?? "").replace(/\D/g, "");   // "32.917.552" -> "3291
 let DB = {};
 
 // ---------- Base de datos (Excel) ----------
-function parse(buf){
-  const wb = XLSX.read(buf, {type:"array"});
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:""});
+// Pega aquí el enlace de Google Sheets (Archivo > Compartir > Publicar en la Web > CSV).
+// Si lo dejas vacío, se usa estudiantes.xlsx del repositorio.
+const SHEET_URL = "";
+
+function parseCSV(t){
+  const rows = []; let row = [], f = "", q = false;
+  for(let i = 0; i < t.length; i++){
+    const c = t[i];
+    if(q){ if(c === '"'){ if(t[i+1] === '"'){ f += '"'; i++; } else q = false; } else f += c; }
+    else if(c === '"') q = true;
+    else if(c === ","){ row.push(f); f = ""; }
+    else if(c === "\n"){ row.push(f); rows.push(row); row = []; f = ""; }
+    else if(c !== "\r") f += c;
+  }
+  if(f || row.length){ row.push(f); rows.push(row); }
+  const h = rows.shift().map(x => x.trim().toLowerCase());
+  return rows.map(r => Object.fromEntries(h.map((k, i) => [k, (r[i] ?? "").trim()])));
+}
+function fill(rows){
   DB = {};
   rows.forEach(r => { const k = norm(r.cedula); if(k) DB[k] = r; });
   $("loadMsg").innerHTML = `<small>✔ ${Object.keys(DB).length} estudiantes cargados</small>`;
+  render();
+}
+const esc = v => String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function render(){
+  const f = $("q").value.toLowerCase();
+  const rows = Object.values(DB).filter(r => [r.nombre, r.cedula, r.curso].join(" ").toLowerCase().includes(f));
+  $("lista").innerHTML = `<table><tr><th>Nombre</th><th>Cédula</th><th>Curso</th><th>Estado</th></tr>` +
+    rows.map(r => `<tr class="r" data-c="${norm(r.cedula)}"><td>${esc(r.nombre)}</td><td>${esc(r.cedula)}</td><td>${esc(r.curso)}</td><td>${esc(r.estado)}</td></tr>`).join("") + `</table>`;
+}
+$("q").oninput = render;
+$("lista").onclick = e => { const tr = e.target.closest("tr.r"); if(tr){ $("ced").value = tr.dataset.c; $("btnBuscar").click(); scrollTo(0, 0); } };
+function parse(buf){
+  const wb = XLSX.read(buf, {type:"array"});
+  fill(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:""}));
 }
 async function load(){
   try{
-    const r = await fetch("estudiantes.xlsx?t=" + Date.now());
-    if(!r.ok) throw 0;
-    parse(await r.arrayBuffer());
+    if(SHEET_URL){
+      const r = await fetch(SHEET_URL + (SHEET_URL.includes("?") ? "&" : "?") + "t=" + Date.now());
+      if(!r.ok) throw 0;
+      fill(parseCSV(await r.text()));
+    }else{
+      let r = await fetch("estudiantes.csv?t=" + Date.now());
+      if(r.ok) fill(parseCSV(await r.text()));
+      else{
+        r = await fetch("estudiantes.xlsx?t=" + Date.now());
+        if(!r.ok) throw 0;
+        parse(await r.arrayBuffer());
+      }
+    }
   }catch(e){
-    $("loadMsg").innerHTML = "<small>No se pudo leer estudiantes.xlsx automáticamente. Selecciónalo:</small>";
+    $("loadMsg").innerHTML = "<small>No se pudo leer la base de datos automáticamente. Selecciona el Excel:</small>";
     $("file").classList.remove("hide");
   }
 }
